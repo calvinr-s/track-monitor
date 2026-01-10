@@ -10,6 +10,10 @@ from typing import Dict, List, Optional, Any
 import sys
 sys.path.append('/Users/calvinsmith/Desktop/Track Monitor')
 from config import BETFAIR_API_KEY
+try:
+    from config import PROXY_URL
+except ImportError:
+    PROXY_URL = None
 
 
 class BetfairSource:
@@ -67,7 +71,7 @@ class BetfairSource:
 
         session = await self._get_session()
         try:
-            async with session.get(self.BASE_URL, params=params, timeout=10) as resp:
+            async with session.get(self.BASE_URL, params=params, timeout=10, proxy=PROXY_URL) as resp:
                 if resp.status != 200:
                     return []
                 data = await resp.json()
@@ -119,7 +123,7 @@ class BetfairSource:
 
         session = await self._get_session()
         try:
-            async with session.get(self.ODDS_URL, params=params, timeout=10) as resp:
+            async with session.get(self.ODDS_URL, params=params, timeout=10, proxy=PROXY_URL) as resp:
                 if resp.status != 200:
                     return {}
                 data = await resp.json()
@@ -153,7 +157,7 @@ class BetfairSource:
 
         session = await self._get_session()
         try:
-            async with session.get(self.ODDS_URL, params=params, timeout=10) as resp:
+            async with session.get(self.ODDS_URL, params=params, timeout=10, proxy=PROXY_URL) as resp:
                 if resp.status != 200:
                     return None
                 data = await resp.json()
@@ -179,7 +183,7 @@ class BetfairSource:
                 'maxResults': '10'
             }
 
-            async with session.get(nav_url, params=nav_params, timeout=10) as resp:
+            async with session.get(nav_url, params=nav_params, timeout=10, proxy=PROXY_URL) as resp:
                 if resp.status != 200:
                     # Try alternative approach - modify market ID
                     # Place markets often have sequential IDs
@@ -406,7 +410,7 @@ class BetfairSource:
 
         session = await self._get_session()
         try:
-            async with session.get(self.BASE_URL, params=params, timeout=10) as resp:
+            async with session.get(self.BASE_URL, params=params, timeout=10, proxy=PROXY_URL) as resp:
                 if resp.status != 200:
                     return []
                 data = await resp.json()

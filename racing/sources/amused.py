@@ -149,7 +149,8 @@ class AmusedSource:
 
     async def find_race(self, venue: str, race_number: int, start_time: datetime, international: bool = False) -> Optional[Dict]:
         """
-        Find a specific race by venue, race number, and approximate start time
+        Find a specific race by venue and start time.
+        Matches by time (within 5 min tolerance) since race numbers can differ between sources.
         """
         today = start_time.strftime("%Y-%m-%d")
         meetings = await self.get_meetings(today, international=international)
@@ -162,15 +163,16 @@ class AmusedSource:
             if meeting_venue not in search_venue and search_venue not in meeting_venue:
                 continue
 
-            for race in meeting['races']:
-                if race['race_number'] != race_number:
-                    continue
+            # Find race with closest start time within tolerance
+            best_match = None
+            best_diff = 300  # 5 minutes tolerance
 
-                # Check time tolerance (5 minutes)
+            for race in meeting['races']:
                 if race['start_time']:
                     time_diff = abs((race['start_time'] - start_time).total_seconds())
-                    if time_diff <= 300:  # 5 minutes tolerance
-                        return {
+                    if time_diff <= best_diff:
+                        best_diff = time_diff
+                        best_match = {
                             'meet_id': meeting['meet_id'],
                             'race_id': race['race_id'],
                             'venue': meeting['venue'],
@@ -178,6 +180,9 @@ class AmusedSource:
                             'race_name': race['race_name'],
                             'start_time': race['start_time']
                         }
+
+            if best_match:
+                return best_match
 
         return None
 

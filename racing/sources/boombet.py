@@ -1,25 +1,26 @@
 """
-Betr data source - provides win odds
-Uses BlueBet API (Betr is powered by BlueBet)
+BoomBet data source - provides win odds
 """
 
 import asyncio
 import aiohttp
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
-import sys
-sys.path.append('/Users/calvinsmith/Desktop/Track Monitor')
 
 
-class BetrSource:
-    """Betr bookmaker data source"""
+class BoomBetSource:
+    """BoomBet bookmaker data source"""
 
-    MEETINGS_URL = "https://web20-api.bluebet.com.au/GroupedRaceCard"
-    RACE_URL = "https://web20-api.bluebet.com.au/Race"
+    MEETINGS_URL = "https://sb-saturn.azurefd.net/api/v3/race/getracecardsall"
+    RACE_URL = "https://sb-saturn.azurefd.net/api/v3/race/event"
 
     HEADERS = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-        'Accept': 'application/json'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Origin': 'https://www.boombet.com.au',
+        'Referer': 'https://www.boombet.com.au/',
+        'sp-deviceid': 'dev',
+        'sp-platformid': '2',
     }
 
     def __init__(self):
@@ -34,14 +35,16 @@ class BetrSource:
         if self.session and not self.session.closed:
             await self.session.close()
 
-    async def get_meetings(self, date: str = None, international: bool = False) -> List[Dict]:
+    async def get_meetings(self, international: bool = False) -> List[Dict]:
         """
         Fetch horse racing meetings for today
         Args:
-            date: Not used (API only supports today via DaysToRace)
             international: If True, fetch all countries. If False, only Australia.
         """
-        params = {'DaysToRace': '0'}
+        params = {
+            'day': '7',  # 7 = thoroughbred
+            'onExactDate': '991231'  # Special value for all dates
+        }
 
         session = await self._get_session()
 
@@ -51,69 +54,72 @@ class BetrSource:
                     return []
                 data = await resp.json()
         except Exception as e:
-            print(f"Betr meetings error: {e}")
+            print(f"BoomBet meetings error: {e}")
             return []
 
         meetings = []
 
-        # Thoroughbred contains list of meetings, each meeting is a list of races
-        thoroughbred = data.get('Thoroughbred', [])
-
-        for meeting_races in thoroughbred:
-            if not meeting_races:
+        # Data is a list of meetings
+        for meeting in data:
+            # type 4 = thoroughbred
+            if meeting.get('type') != 4:
                 continue
 
-            # Get venue info from first race
-            first_race = meeting_races[0]
-            venue = first_race.get('Venue', 'Unknown')
-            country_code = first_race.get('CountryCode', 'AUS')
+            venue = meeting.get('meetingName', 'Unknown')
+            state = meeting.get('state', '')
 
-            # Filter by country unless international
-            if not international and country_code != 'AUS':
+            # Filter to Australian states unless international
+            au_states = ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT']
+            if not international and state not in au_states:
                 continue
 
             races = []
-            for race in meeting_races:
-                start_str = race.get('AdvertisedStartTime')
+            for race in meeting.get('races', []):
+                jump_time_str = race.get('jumpTime') or race.get('outcomeTime')
                 start_time = None
-                if start_str:
+                if jump_time_str:
                     try:
-                        # Handle format: 2026-01-08T05:00:00.0000000Z
-                        start_time = datetime.fromisoformat(start_str.replace('Z', '+00:00').split('.')[0] + '+00:00')
+                        start_time = datetime.fromisoformat(jump_time_str.replace('Z', '+00:00'))
                     except:
                         pass
 
                 races.append({
-                    'event_id': race.get('EventId'),
-                    'race_number': race.get('RaceNumber'),
-                    'race_name': race.get('EventName'),
+                    'event_id': race.get('eventId'),
+                    'race_number': race.get('raceNumber'),
+                    'race_name': race.get('description'),
                     'start_time': start_time,
-                    'is_open': race.get('IsOpenForBetting', False)
+                    'status': race.get('status'),
+                    'jumps_in_sec': race.get('jumpsInSec', 0)
                 })
 
             meetings.append({
                 'venue': venue,
-                'country_code': country_code,
+                'state': state,
                 'races': races
             })
 
         return meetings
 
-    async def get_race_odds(self, event_id: int) -> Dict:
+    async def get_race_odds(self, event_id: str) -> Dict:
         """
         Fetch odds for a specific race
         Returns dict with runners and their win odds
         """
-        params = {'eventId': str(event_id)}
+        url = f"{self.RACE_URL}/{event_id}"
+        params = {
+            'checkHotBet': 'false',
+            'includeForm': 'false'
+        }
+
         session = await self._get_session()
 
         try:
-            async with session.get(self.RACE_URL, params=params, timeout=10) as resp:
+            async with session.get(url, params=params, timeout=10) as resp:
                 if resp.status != 200:
                     return {}
                 data = await resp.json()
         except Exception as e:
-            print(f"Betr odds error: {e}")
+            print(f"BoomBet odds error: {e}")
             return {}
 
         result = {
@@ -121,32 +127,28 @@ class BetrSource:
             'runners': {}
         }
 
-        for runner in data.get('Outcomes', []):
-            # OutcomeId is the saddle cloth number
-            horse_number = runner.get('OutcomeId')
-            if horse_number is not None:
-                try:
-                    horse_number = int(horse_number)
-                except:
-                    continue
+        for runner in data.get('runners', []):
+            horse_number = runner.get('number')
+            if horse_number is None:
+                continue
 
-            horse_name = runner.get('OutcomeName', 'Unknown')
-            is_scratched = runner.get('Scratched', False)
+            horse_name = runner.get('name', 'Unknown')
+            is_scratched = runner.get('isEliminated', False) or runner.get('scratchedDateTime') is not None
 
-            # Get WIN odds from FixedPrices
+            # Get Fixed Win odds from odds array
             win_odds = None
-            for fp in runner.get('FixedPrices', []):
-                if fp.get('MarketTypeCode') == 'WIN':
-                    win_odds = fp.get('Price')
+            for odds_entry in runner.get('odds', []):
+                product = odds_entry.get('product', {})
+                if product.get('specialType') == 'FWIN':
+                    win_odds = odds_entry.get('value')
                     break
 
-            if horse_number:
-                result['runners'][horse_number] = {
-                    'horse_number': horse_number,
-                    'horse_name': horse_name,
-                    'win_odds': win_odds,
-                    'scratched': is_scratched
-                }
+            result['runners'][horse_number] = {
+                'horse_number': horse_number,
+                'horse_name': horse_name,
+                'win_odds': win_odds,
+                'scratched': is_scratched
+            }
 
         return result
 
@@ -189,26 +191,28 @@ class BetrSource:
 
 
 async def test():
-    """Test the Betr source"""
-    source = BetrSource()
+    """Test the BoomBet source"""
+    source = BoomBetSource()
     try:
         print("Fetching meetings...")
         meetings = await source.get_meetings()
         print(f"Found {len(meetings)} meetings")
 
         if meetings:
-            first_meeting = meetings[0]
-            print(f"First meeting: {first_meeting['venue']}")
+            for meeting in meetings[:3]:
+                print(f"\n{meeting['venue']} ({meeting['state']})")
+                for race in meeting['races'][:2]:
+                    print(f"  R{race['race_number']}: {race['race_name']} (ID: {race['event_id']})")
 
+            # Test odds fetch
+            first_meeting = meetings[0]
             if first_meeting['races']:
                 first_race = first_meeting['races'][0]
-                print(f"First race: R{first_race['race_number']} - {first_race['race_name']}")
-
-                print("\nFetching odds...")
+                print(f"\nFetching odds for {first_meeting['venue']} R{first_race['race_number']}...")
                 odds = await source.get_race_odds(first_race['event_id'])
-                print(f"Runners: {len(odds['runners'])}")
+                print(f"Runners: {len(odds.get('runners', {}))}")
 
-                for num, runner in list(odds['runners'].items())[:3]:
+                for num, runner in list(odds.get('runners', {}).items())[:3]:
                     print(f"  #{num}: {runner['horse_name']} - ${runner['win_odds']}")
     finally:
         await source.close()

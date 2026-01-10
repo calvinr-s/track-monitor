@@ -20,16 +20,24 @@ COUNTRY_NAMES = {
 BOOKIE_ORDER = [
     'amused',
     'betr',
+    'boombet',
+    'palmerbet',
+    'playup',
     'pointsbet',
     'sportsbet',
+    'tab',
 ]
 
 # Bookmaker display names (all padded to same length for consistency)
 BOOKIE_NAMES = {
     'amused': 'Amused',
     'betr': 'Betr',
+    'boombet': 'BoomBet',
+    'palmerbet': 'PalmerBet',
+    'playup': 'PlayUp',
     'pointsbet': 'PointsBet',
     'sportsbet': 'SportsBet',
+    'tab': 'TAB',
 }
 
 # ANSI color codes for Discord code blocks
@@ -43,11 +51,17 @@ ANSI_CYAN = "\u001b[0;36m"
 ANSI_LIGHT_BLUE = "\u001b[1;34m"  # Bright blue
 ANSI_ORANGE = "\u001b[0;33m"  # Yellow/Orange (ANSI doesn't have true orange)
 
+ANSI_WHITE = "\u001b[0;37m"
+
 BOOKIE_COLORS = {
     'amused': ANSI_MAGENTA,
     'betr': ANSI_BLUE,        # Dark blue
+    'boombet': ANSI_YELLOW,   # Yellow/Orange
+    'palmerbet': ANSI_WHITE,  # White
+    'playup': ANSI_LIGHT_BLUE,  # Bright blue
     'pointsbet': ANSI_RED,
     'sportsbet': ANSI_CYAN,   # Light blue/cyan (#3CDFF-ish)
+    'tab': ANSI_GREEN,        # Green
 }
 
 # Column widths (fixed for consistent alignment)
@@ -278,6 +292,17 @@ def format_bookie_table(runners: List[Dict], countdown_str: str, venue: str, rac
         return (bookie_idx, -ev)
 
     rows.sort(key=sort_key)
+
+    # Limit to top 4 rows per bookmaker to stay under Discord's 4096 char limit
+    limited_rows = []
+    bookie_counts = {}
+    for row in rows:
+        bookie = row['bookie']
+        count = bookie_counts.get(bookie, 0)
+        if count < 4:
+            limited_rows.append(row)
+            bookie_counts[bookie] = count + 1
+    rows = limited_rows
 
     # Build output lines
     lines = []
