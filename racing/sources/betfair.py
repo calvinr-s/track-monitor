@@ -23,26 +23,12 @@ class BetfairSource:
     BASE_URL = "https://apieds.betfair.com.au/api/eds/meeting-races/v4"
     ODDS_URL = "https://ero.betfair.com.au/www/sports/exchange/readonly/v1/bymarket"
 
-    HEADERS = {
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'en-AU,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Referer': 'https://www.betfair.com.au/exchange/plus/',
-        'Origin': 'https://www.betfair.com.au',
-        'Sec-Fetch-Dest': 'empty',
-        'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Site': 'same-site',
-    }
-
     def __init__(self):
         self.session: Optional[AsyncSession] = None
 
     async def _get_session(self) -> AsyncSession:
         if self.session is None:
-            self.session = AsyncSession(
-                impersonate="chrome120",
-                headers=self.HEADERS
-            )
+            self.session = AsyncSession(impersonate="chrome")
         return self.session
 
     async def close(self):
@@ -54,19 +40,8 @@ class BetfairSource:
         """Fetch JSON from URL with Cloudflare bypass"""
         session = await self._get_session()
         try:
-            resp = await session.get(
-                url,
-                params=params,
-                timeout=15,
-                proxy=PROXY_URL
-            )
+            resp = await session.get(url, params=params, timeout=15)
             if resp.status_code != 200:
-                print(f"Betfair status {resp.status_code} for {url.split('/')[-1]}")
-                return None
-            # Check if response is JSON
-            content_type = resp.headers.get('content-type', '')
-            if 'json' not in content_type:
-                print(f"Betfair got HTML instead of JSON for {url.split('/')[-1]}")
                 return None
             return resp.json()
         except Exception as e:
@@ -76,16 +51,11 @@ class BetfairSource:
     async def get_meetings(self, date: str = None, international: bool = False) -> List[Dict]:
         """
         Fetch horse racing meetings for a date
-        Args:
-            date: Date string YYYY-MM-DD (defaults to today)
-            international: If True, fetch all countries. If False, only Australia.
-        Returns list of meetings with races
         """
         if date is None:
             now = datetime.now(timezone.utc)
             date = now.strftime("%Y-%m-%d")
 
-        # Build date range for the day
         start = f"{date}T00:00:00.000Z"
         end = f"{date}T23:59:59.999Z"
 
@@ -96,7 +66,6 @@ class BetfairSource:
             'marketStartingBefore': end
         }
 
-        # Filter to Australia only if not international
         if not international:
             params['countriesGroup'] = '[["AU"]]'
             params['countriesList'] = '["AU"]'
@@ -134,10 +103,7 @@ class BetfairSource:
         return meetings
 
     async def get_race_odds(self, market_id: str) -> Dict:
-        """
-        Fetch odds for a specific WIN market
-        Returns dict with runners and their back/lay odds
-        """
+        """Fetch odds for a specific WIN market"""
         params = {
             '_ak': BETFAIR_API_KEY,
             'currencyCode': 'AUD',
@@ -154,10 +120,7 @@ class BetfairSource:
         return self._parse_odds_response(data)
 
     async def get_place_market_id(self, win_market_id: str) -> Optional[str]:
-        """
-        Find the PLACE market ID corresponding to a WIN market
-        Place markets typically have a different market ID but same event
-        """
+        """Find the PLACE market ID corresponding to a WIN market"""
         params = {
             '_ak': BETFAIR_API_KEY,
             'currencyCode': 'AUD',
@@ -172,7 +135,6 @@ class BetfairSource:
             return None
 
         try:
-            # Get event ID
             event_types = data.get('eventTypes', [])
             if not event_types:
                 return None
@@ -183,7 +145,6 @@ class BetfairSource:
 
             event_id = event_nodes[0].get('eventId')
 
-            # Now search for place market for this event
             nav_url = "https://ero.betfair.com.au/www/sports/navigation/facet/v1/search"
             nav_params = {
                 '_ak': BETFAIR_API_KEY,
@@ -194,7 +155,6 @@ class BetfairSource:
 
             nav_data = await self._fetch_json(nav_url, nav_params)
             if nav_data:
-                # Look for TO_BE_PLACED or PLACE market
                 attachments = nav_data.get('attachments', {})
                 markets = attachments.get('markets', {})
 
@@ -206,8 +166,7 @@ class BetfairSource:
             # Fallback: try sequential ID
             base_id = win_market_id.split('.')
             if len(base_id) == 2:
-                place_id = f"{base_id[0]}.{int(base_id[1]) + 1}"
-                return place_id
+                return f"{base_id[0]}.{int(base_id[1]) + 1}"
 
         except Exception as e:
             print(f"Betfair place market search error: {e}")
@@ -215,28 +174,20 @@ class BetfairSource:
         return None
 
     async def get_race_with_place_odds(self, win_market_id: str) -> Dict:
-        """
-        Fetch both WIN and PLACE odds for a race
-        Returns combined data structure
-        """
-        # Fetch win odds
+        """Fetch both WIN and PLACE odds for a race"""
         win_data = await self.get_race_odds(win_market_id)
-
-        # Try to find and fetch place odds
         place_market_id = await self.get_place_market_id(win_market_id)
         place_data = {}
 
         if place_market_id:
             place_data = await self.get_race_odds(place_market_id)
 
-        # Combine the data
         result = {
             'win_market_id': win_market_id,
             'place_market_id': place_market_id,
             'runners': {}
         }
 
-        # Add win odds
         for runner in win_data.get('runners', []):
             horse_num = runner.get('horse_number')
             if horse_num:
@@ -252,7 +203,6 @@ class BetfairSource:
                     'status': runner.get('status')
                 }
 
-        # Add place odds
         for runner in place_data.get('runners', []):
             horse_num = runner.get('horse_number')
             if horse_num and horse_num in result['runners']:
@@ -282,7 +232,6 @@ class BetfairSource:
                         for idx, runner in enumerate(market_node.get('runners', []), start=1):
                             runner_name = runner.get('description', {}).get('runnerName', 'Unknown')
 
-                            # Extract horse number from name (AU format: "1. Horse Name")
                             horse_number = None
                             horse_name = runner_name
                             if '.' in runner_name:
@@ -293,7 +242,6 @@ class BetfairSource:
                                 except:
                                     pass
 
-                            # For UK/international races without numbers, use index
                             if horse_number is None:
                                 horse_number = idx
 
@@ -321,28 +269,15 @@ class BetfairSource:
         return result
 
     async def find_next_race(self, international: bool = False) -> Optional[Dict]:
-        """
-        Find the next race to start
-        Args:
-            international: If True, search all countries. If False, only Australia.
-        Returns race info with market_id
-        """
+        """Find the next race to start"""
         races = await self.find_upcoming_races(international=international, limit=1)
         return races[0] if races else None
 
     async def find_upcoming_races(self, international: bool = False, limit: int = 10) -> List[Dict]:
-        """
-        Find the next N upcoming races, sorted by start time.
-        Args:
-            international: If True, search all countries. If False, only Australia.
-            limit: Maximum number of races to return
-        Returns list of race info dicts
-        """
+        """Find the next N upcoming races, sorted by start time"""
         from datetime import timedelta
 
         now = datetime.now(timezone.utc)
-
-        # Search from now to 18 hours ahead (covers overnight into next day)
         meetings = await self.get_meetings_by_time(
             start_time=now,
             end_time=now + timedelta(hours=18),
@@ -350,7 +285,6 @@ class BetfairSource:
         )
 
         upcoming = []
-
         for meeting in meetings:
             venue = meeting['venue']
             country_code = meeting.get('country_code', 'AU')
@@ -365,8 +299,6 @@ class BetfairSource:
                     continue
 
                 delta = (start_time - now).total_seconds()
-
-                # Only consider future races
                 if delta > 0:
                     upcoming.append({
                         'venue': venue,
@@ -378,14 +310,11 @@ class BetfairSource:
                         'seconds_until_start': delta
                     })
 
-        # Sort by start time and limit
         upcoming.sort(key=lambda x: x['seconds_until_start'])
         return upcoming[:limit]
 
     async def get_meetings_by_time(self, start_time: datetime, end_time: datetime, international: bool = False) -> List[Dict]:
-        """
-        Fetch meetings within a specific time range
-        """
+        """Fetch meetings within a specific time range"""
         start = start_time.strftime("%Y-%m-%dT%H:%M:%S.000Z")
         end = end_time.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
