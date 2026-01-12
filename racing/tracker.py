@@ -39,6 +39,9 @@ HEADERS = [
     "P/L No Lay",
     "P/L Half Lay",
     "P/L Full Lay",
+    "Cum No Lay",
+    "Cum Half Lay",
+    "Cum Full Lay",
 ]
 
 # Bookmaker list
@@ -86,13 +89,22 @@ class EVTracker:
                 ws.append_row(HEADERS)
                 print(f"[TRACKER] Created sheet: {sheet_name}")
             else:
-                # Check if headers exist
+                # Check if headers exist and resize if needed
                 ws = spreadsheet.worksheet(sheet_name)
                 try:
+                    # Resize to ensure enough columns for cumulative totals
+                    if ws.col_count < len(HEADERS):
+                        ws.resize(cols=len(HEADERS))
+                        print(f"[TRACKER] Resized {sheet_name} to {len(HEADERS)} columns")
+
                     first_row = ws.row_values(1)
                     if not first_row or first_row[0] != "Date":
                         ws.insert_row(HEADERS, 1)
                         print(f"[TRACKER] Added headers to: {sheet_name}")
+                    elif len(first_row) < len(HEADERS):
+                        # Update headers to include new columns
+                        ws.update('A1', [HEADERS])
+                        print(f"[TRACKER] Updated headers for: {sheet_name}")
                 except:
                     ws.append_row(HEADERS)
 
@@ -233,6 +245,9 @@ class EVTracker:
             "",  # P/L No Lay
             "",  # P/L Half Lay
             "",  # P/L Full Lay
+            "",  # Cum No Lay
+            "",  # Cum Half Lay
+            "",  # Cum Full Lay
         ]
 
         try:
@@ -324,6 +339,9 @@ class EVTracker:
                         ws.update_cell(i, 14, round(pl_half, 2))
                         ws.update_cell(i, 15, round(pl_full, 2))
 
+                        # Recalculate cumulative totals for this sheet
+                        self._update_cumulative_totals(sheet_name)
+
                         print(f"[TRACKER] Updated result for {venue} R{race_num}: {result}")
                         return True
 
@@ -333,6 +351,47 @@ class EVTracker:
         except Exception as e:
             print(f"[TRACKER] Error updating result: {e}")
             return False
+
+    def _update_cumulative_totals(self, sheet_name: str):
+        """Recalculate cumulative P/L totals for a sheet"""
+        try:
+            spreadsheet = self._get_spreadsheet()
+            ws = spreadsheet.worksheet(sheet_name)
+            data = ws.get_all_values()
+
+            if len(data) <= 1:
+                return
+
+            # Calculate cumulative totals
+            cum_no_lay = 0.0
+            cum_half = 0.0
+            cum_full = 0.0
+            updates = []
+
+            for i, row in enumerate(data[1:], start=2):
+                if len(row) >= 15 and row[12]:  # Has P/L No Lay
+                    try:
+                        pl_no_lay = float(row[12]) if row[12] else 0
+                        pl_half = float(row[13]) if row[13] else 0
+                        pl_full = float(row[14]) if row[14] else 0
+
+                        cum_no_lay += pl_no_lay
+                        cum_half += pl_half
+                        cum_full += pl_full
+
+                        updates.append({
+                            'range': f'P{i}:R{i}',
+                            'values': [[round(cum_no_lay, 2), round(cum_half, 2), round(cum_full, 2)]]
+                        })
+                    except:
+                        pass
+
+            # Batch update all cumulative cells
+            if updates:
+                ws.batch_update(updates)
+
+        except Exception as e:
+            print(f"[TRACKER] Error updating cumulative totals: {e}")
 
     def get_stats(self, sheet_name: Optional[str] = None) -> Dict:
         """
@@ -460,7 +519,7 @@ class EVTracker:
                                 race_dt = race_dt.replace(tzinfo=SYDNEY_TZ)
 
                                 now = datetime.now(SYDNEY_TZ)
-                                if (now - race_dt).total_seconds() > 1800:  # 30 min
+                                if (now - race_dt).total_seconds() > 900:  # 15 min
                                     pending.append({
                                         'sheet': sheet_name,
                                         'date': date_str,
