@@ -222,6 +222,12 @@ class EVTracker:
             print(f"[TRACKER] No valid opportunity for {race_data['venue']} R{race_data['race_number']}")
             return
 
+        # Skip if EV is below 5% (use full lay EV as the reference)
+        min_ev = 5.0
+        if best.get('ev_full_lay') is None or best['ev_full_lay'] < min_ev:
+            print(f"[TRACKER] Skipping {race_data['venue']} R{race_data['race_number']} - EV {best.get('ev_full_lay', 0):.1f}% < {min_ev}%")
+            return
+
         # Prepare row
         now = datetime.now(SYDNEY_TZ)
         start_time = race_data['start_time']
