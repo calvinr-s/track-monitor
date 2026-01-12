@@ -274,14 +274,24 @@ class BetfairSource:
         races = await self.find_upcoming_races(international=international, limit=1)
         return races[0] if races else None
 
+    def _is_harness_race(self, race_name: str) -> bool:
+        """Check if race is harness racing (trots/pace) based on race name"""
+        if not race_name:
+            return False
+        name_upper = race_name.upper()
+        # Harness racing indicators: Pace, Trot, mobile start ratings (M0-M5)
+        harness_keywords = ['PACE', 'TROT', ' M0', ' M1', ' M2', ' M3', ' M4', ' M5', 'MOBILE']
+        return any(kw in name_upper for kw in harness_keywords)
+
     async def find_upcoming_races(self, international: bool = False, limit: int = 10) -> List[Dict]:
         """Find the next N upcoming races, sorted by start time"""
         from datetime import timedelta
 
         now = datetime.now(timezone.utc)
+        # Look up to 36 hours ahead to catch tomorrow's races
         meetings = await self.get_meetings_by_time(
             start_time=now,
-            end_time=now + timedelta(hours=18),
+            end_time=now + timedelta(hours=36),
             international=international
         )
 
@@ -291,6 +301,10 @@ class BetfairSource:
             country_code = meeting.get('country_code', 'AU')
             for race in meeting['races']:
                 if race['status'] not in ('OPEN', 'SUSPENDED'):
+                    continue
+
+                # Skip harness racing (trots/pace)
+                if self._is_harness_race(race.get('race_name', '')):
                     continue
 
                 start_str = race['start_time']
