@@ -1,10 +1,11 @@
 """
 Betfair data source - provides back/lay odds and liquidity
 Includes both WIN and PLACE markets
+Uses curl_cffi to bypass Cloudflare protection
 """
 
 import asyncio
-import aiohttp
+from curl_cffi.requests import AsyncSession
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 import sys
@@ -22,24 +23,35 @@ class BetfairSource:
     BASE_URL = "https://apieds.betfair.com.au/api/eds/meeting-races/v4"
     ODDS_URL = "https://ero.betfair.com.au/www/sports/exchange/readonly/v1/bymarket"
 
-    HEADERS = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Referer': 'https://www.betfair.com.au/',
-        'Origin': 'https://www.betfair.com.au'
-    }
-
     def __init__(self):
-        self.session: Optional[aiohttp.ClientSession] = None
+        self.session: Optional[AsyncSession] = None
 
-    async def _get_session(self) -> aiohttp.ClientSession:
-        if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession(headers=self.HEADERS)
+    async def _get_session(self) -> AsyncSession:
+        if self.session is None:
+            self.session = AsyncSession(impersonate="chrome")
         return self.session
 
     async def close(self):
-        if self.session and not self.session.closed:
+        if self.session:
             await self.session.close()
+            self.session = None
+
+    async def _fetch_json(self, url: str, params: dict) -> Optional[Any]:
+        """Fetch JSON from URL with Cloudflare bypass"""
+        session = await self._get_session()
+        try:
+            resp = await session.get(
+                url,
+                params=params,
+                timeout=15,
+                proxy=PROXY_URL
+            )
+            if resp.status_code != 200:
+                return None
+            return resp.json()
+        except Exception as e:
+            print(f"Betfair fetch error: {e}")
+            return None
 
     async def get_meetings(self, date: str = None, international: bool = False) -> List[Dict]:
         """
@@ -69,14 +81,8 @@ class BetfairSource:
             params['countriesGroup'] = '[["AU"]]'
             params['countriesList'] = '["AU"]'
 
-        session = await self._get_session()
-        try:
-            async with session.get(self.BASE_URL, params=params, timeout=10, proxy=PROXY_URL) as resp:
-                if resp.status != 200:
-                    return []
-                data = await resp.json()
-        except Exception as e:
-            print(f"Betfair meetings error: {e}")
+        data = await self._fetch_json(self.BASE_URL, params)
+        if not data:
             return []
 
         meetings = []
@@ -121,14 +127,8 @@ class BetfairSource:
             'types': 'MARKET_STATE,RUNNER_STATE,RUNNER_EXCHANGE_PRICES_BEST,RUNNER_DESCRIPTION'
         }
 
-        session = await self._get_session()
-        try:
-            async with session.get(self.ODDS_URL, params=params, timeout=10, proxy=PROXY_URL) as resp:
-                if resp.status != 200:
-                    return {}
-                data = await resp.json()
-        except Exception as e:
-            print(f"Betfair odds error: {e}")
+        data = await self._fetch_json(self.ODDS_URL, params)
+        if not data:
             return {}
 
         return self._parse_odds_response(data)
@@ -138,14 +138,6 @@ class BetfairSource:
         Find the PLACE market ID corresponding to a WIN market
         Place markets typically have a different market ID but same event
         """
-        # Betfair place market IDs are typically win_market_id with different suffix
-        # We need to search for it via the navigation API or construct it
-        # For now, we'll try to find it by querying related markets
-
-        # The place market is usually listed alongside win market
-        # Try fetching the event and finding TO_BE_PLACED market
-
-        # Extract event ID from market response
         params = {
             '_ak': BETFAIR_API_KEY,
             'currencyCode': 'AUD',
@@ -155,13 +147,11 @@ class BetfairSource:
             'types': 'MARKET_STATE'
         }
 
-        session = await self._get_session()
-        try:
-            async with session.get(self.ODDS_URL, params=params, timeout=10, proxy=PROXY_URL) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json()
+        data = await self._fetch_json(self.ODDS_URL, params)
+        if not data:
+            return None
 
+        try:
             # Get event ID
             event_types = data.get('eventTypes', [])
             if not event_types:
@@ -174,7 +164,6 @@ class BetfairSource:
             event_id = event_nodes[0].get('eventId')
 
             # Now search for place market for this event
-            # Try the navigation endpoint
             nav_url = "https://ero.betfair.com.au/www/sports/navigation/facet/v1/search"
             nav_params = {
                 '_ak': BETFAIR_API_KEY,
@@ -183,39 +172,22 @@ class BetfairSource:
                 'maxResults': '10'
             }
 
-            async with session.get(nav_url, params=nav_params, timeout=10, proxy=PROXY_URL) as resp:
-                if resp.status != 200:
-                    # Try alternative approach - modify market ID
-                    # Place markets often have sequential IDs
-                    try:
-                        base_id = win_market_id.split('.')
-                        if len(base_id) == 2:
-                            # Try incrementing the market ID
-                            place_id = f"{base_id[0]}.{int(base_id[1]) + 1}"
-                            return place_id
-                    except:
-                        pass
-                    return None
+            nav_data = await self._fetch_json(nav_url, nav_params)
+            if nav_data:
+                # Look for TO_BE_PLACED or PLACE market
+                attachments = nav_data.get('attachments', {})
+                markets = attachments.get('markets', {})
 
-                nav_data = await resp.json()
-
-            # Look for TO_BE_PLACED or PLACE market
-            attachments = nav_data.get('attachments', {})
-            markets = attachments.get('markets', {})
-
-            for mid, market_info in markets.items():
-                market_type = market_info.get('marketType', '')
-                if 'PLACE' in market_type.upper() or 'TO_BE_PLACED' in market_type.upper():
-                    return mid
+                for mid, market_info in markets.items():
+                    market_type = market_info.get('marketType', '')
+                    if 'PLACE' in market_type.upper() or 'TO_BE_PLACED' in market_type.upper():
+                        return mid
 
             # Fallback: try sequential ID
-            try:
-                base_id = win_market_id.split('.')
-                if len(base_id) == 2:
-                    place_id = f"{base_id[0]}.{int(base_id[1]) + 1}"
-                    return place_id
-            except:
-                pass
+            base_id = win_market_id.split('.')
+            if len(base_id) == 2:
+                place_id = f"{base_id[0]}.{int(base_id[1]) + 1}"
+                return place_id
 
         except Exception as e:
             print(f"Betfair place market search error: {e}")
@@ -408,14 +380,8 @@ class BetfairSource:
             params['countriesGroup'] = '[["AU"]]'
             params['countriesList'] = '["AU"]'
 
-        session = await self._get_session()
-        try:
-            async with session.get(self.BASE_URL, params=params, timeout=10, proxy=PROXY_URL) as resp:
-                if resp.status != 200:
-                    return []
-                data = await resp.json()
-        except Exception as e:
-            print(f"Betfair meetings error: {e}")
+        data = await self._fetch_json(self.BASE_URL, params)
+        if not data:
             return []
 
         meetings = []
