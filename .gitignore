@@ -1,5 +1,7 @@
-# Secrets - NEVER commit
-config.py
+# Secrets
+.env
+*.json
+!.env.example
 
 # Python
 __pycache__/
@@ -9,10 +11,9 @@ __pycache__/
 .Python
 venv/
 ENV/
-.env
 
-# Data files
-*.json
+# Data files (except credentials)
+*_data.json
 
 # macOS
 .DS_Store

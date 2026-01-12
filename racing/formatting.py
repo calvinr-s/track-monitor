@@ -200,6 +200,7 @@ def format_race_embed(race_data: Dict) -> Dict:
     seconds_until = race_data.get('seconds_until_start', 0)
     country_code = race_data.get('country_code', 'AU')
     runners = race_data['runners']
+    fetched_at = race_data.get('fetched_at')
 
     # Format countdown
     countdown_str = _format_countdown(seconds_until)
@@ -221,7 +222,8 @@ def format_race_embed(race_data: Dict) -> Dict:
         venue=venue_str,
         race_no=race_num,
         runner_count=len(runners),
-        promo=promo
+        promo=promo,
+        fetched_at=fetched_at
     )
 
     # Determine embed color based on best EV
@@ -357,12 +359,11 @@ def format_bookie_table(runners: List[Dict], countdown_str: str, venue: str, rac
 
     # Add timestamp footer
     if fetched_at:
-        # Convert to local Sydney time for display
-        import pytz
-        sydney_tz = pytz.timezone('Australia/Sydney')
+        from zoneinfo import ZoneInfo
+        sydney_tz = ZoneInfo('Australia/Sydney')
         local_time = fetched_at.astimezone(sydney_tz)
         lines.append("")
-        lines.append(f"Fetched: {local_time.strftime('%H:%M:%S')}")
+        lines.append(f"Last updated: {local_time.strftime('%H:%M:%S')}")
 
     return "```ansi\n" + "\n".join(lines) + "\n```"
 
