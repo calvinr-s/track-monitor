@@ -39,8 +39,9 @@ class BetfairSource:
     async def _fetch_json(self, url: str, params: dict) -> Optional[Any]:
         """Fetch JSON from URL with Cloudflare bypass"""
         session = await self._get_session()
+        headers = {"Accept": "application/json"}
         try:
-            resp = await session.get(url, params=params, timeout=15)
+            resp = await session.get(url, params=params, headers=headers, timeout=15)
             if resp.status_code != 200:
                 return None
             return resp.json()
