@@ -19,6 +19,7 @@ from config import DISCORD_TOKEN
 from racing import RaceAggregator
 from racing.formatting import format_race_embed, format_no_race_embed
 from racing.tracker import get_tracker
+from racing.sources.sportsbet import SportsbetSource
 
 # File to persist dashboard settings
 DASHBOARD_FILE = os.path.join(os.path.dirname(__file__), 'dashboard_channels.json')
@@ -71,6 +72,8 @@ class RacingBot(discord.Client):
         self.dashboard_loop.start()
         # Start the tracking loop
         self.tracking_loop.start()
+        # Start the results loop
+        self.results_loop.start()
         # Initialize tracker
         try:
             self.tracker = get_tracker()
@@ -190,6 +193,79 @@ class RacingBot(discord.Client):
         await self.wait_until_ready()
         await asyncio.sleep(10)  # Extra delay to let tracker initialize
 
+    @tasks.loop(minutes=5)
+    async def results_loop(self):
+        """Check for pending results and update from Sportsbet"""
+        if not self.tracker:
+            return
+
+        try:
+            pending = self.tracker.get_pending_results()
+            if not pending:
+                return
+
+            print(f"[RESULTS] Checking {len(pending)} pending results...")
+
+            sportsbet = SportsbetSource()
+            try:
+                for race in pending:
+                    try:
+                        # Find race on Sportsbet
+                        sb_race = await sportsbet.find_race_by_venue_and_number(
+                            venue=race['venue'],
+                            race_number=int(race['race']),
+                            date_str=race['date']
+                        )
+
+                        if not sb_race:
+                            continue
+
+                        # Get results
+                        results = await sportsbet.get_race_results(sb_race['event_id'])
+                        if not results:
+                            continue
+
+                        # Find our horse's result
+                        horse_info = race['horse']  # Format: "#N HorseName"
+                        horse_num = int(horse_info.split()[0].replace('#', ''))
+
+                        if horse_num in results:
+                            result = results[horse_num]
+                            position = result['position']
+
+                            # Skip void/scratched horses
+                            if position == -1:
+                                print(f"[RESULTS] Skipping {race['venue']} R{race['race']} - #{horse_num} was void/scratched")
+                                continue
+
+                            # Update tracker
+                            success = self.tracker.update_results(
+                                sheet_name=race['sheet'],
+                                venue=race['venue'],
+                                race_num=int(race['race']),
+                                date_str=race['date'],
+                                position=position
+                            )
+
+                            if success:
+                                pos_str = {1: '1st', 2: '2nd/3rd', 0: '4th+'}
+                                print(f"[RESULTS] Updated {race['venue']} R{race['race']} - #{horse_num} finished {pos_str.get(position, position)}")
+
+                    except Exception as e:
+                        print(f"[RESULTS] Error processing {race['venue']} R{race['race']}: {e}")
+
+            finally:
+                await sportsbet.close()
+
+        except Exception as e:
+            print(f"[RESULTS] Loop error: {e}")
+
+    @results_loop.before_loop
+    async def before_results_loop(self):
+        """Wait for bot to be ready before checking results"""
+        await self.wait_until_ready()
+        await asyncio.sleep(60)  # Wait 1 minute before first check
+
     async def update_dashboard(self, promo: str):
         """Update a single dashboard"""
         message = self.dashboard_messages.get(promo)
@@ -237,6 +313,7 @@ class RacingBot(discord.Client):
     async def close(self):
         self.dashboard_loop.cancel()
         self.tracking_loop.cancel()
+        self.results_loop.cancel()
         await self.aggregator.close()
         await super().close()
 

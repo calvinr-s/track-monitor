@@ -182,6 +182,74 @@ class SportsbetSource:
 
         return None
 
+    async def get_race_results(self, event_id: str) -> Optional[Dict]:
+        """
+        Fetch race results for a completed race.
+        Returns dict mapping horse_number to result code (W=win, P=place, L=lose)
+        """
+        url = self.MARKETS_URL.format(event_id=event_id)
+        session = await self._get_session()
+
+        try:
+            async with session.get(url, timeout=10) as resp:
+                if resp.status != 200:
+                    return None
+                markets = await resp.json()
+        except Exception as e:
+            print(f"Sportsbet results error: {e}")
+            return None
+
+        results = {}
+        for market in markets:
+            if market.get('name') in ['Win or Place', 'Win']:
+                status = market.get('statusCode')
+                if status != 'S':  # S = suspended (race finished)
+                    return None  # Race not finished yet
+
+                for selection in market.get('selections', []):
+                    horse_num = selection.get('runnerNumber')
+                    result_code = selection.get('result')
+                    if horse_num and result_code:
+                        # W=1st (winner), P=placed (2nd/3rd), V=void, L=lost (4th+)
+                        if result_code == 'W':
+                            position = 1
+                        elif result_code == 'P':
+                            position = 2  # Placed = 2nd or 3rd (counts for 2/3 promo)
+                        elif result_code == 'V':
+                            position = -1  # Void/scratched
+                        else:
+                            position = 0  # Lost (4th+)
+                        results[horse_num] = {
+                            'position': position,
+                            'result_code': result_code,
+                            'horse_name': selection.get('name')
+                        }
+                break
+
+        return results if results else None
+
+    async def find_race_by_venue_and_number(self, venue: str, race_number: int, date_str: str) -> Optional[Dict]:
+        """Find a race by venue and race number on a specific date"""
+        meetings = await self.get_meetings(date_str, international=False)
+
+        for meeting in meetings:
+            meeting_venue = meeting['venue'].lower().replace(' ', '')
+            search_venue = venue.lower().replace(' ', '')
+
+            if meeting_venue not in search_venue and search_venue not in meeting_venue:
+                continue
+
+            for race in meeting['races']:
+                if race['race_number'] == race_number:
+                    return {
+                        'event_id': race['event_id'],
+                        'venue': meeting['venue'],
+                        'race_number': race['race_number'],
+                        'status': race['status']
+                    }
+
+        return None
+
 
 async def test():
     """Test the Sportsbet source"""
