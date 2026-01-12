@@ -23,12 +23,26 @@ class BetfairSource:
     BASE_URL = "https://apieds.betfair.com.au/api/eds/meeting-races/v4"
     ODDS_URL = "https://ero.betfair.com.au/www/sports/exchange/readonly/v1/bymarket"
 
+    HEADERS = {
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-AU,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Referer': 'https://www.betfair.com.au/exchange/plus/',
+        'Origin': 'https://www.betfair.com.au',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-site',
+    }
+
     def __init__(self):
         self.session: Optional[AsyncSession] = None
 
     async def _get_session(self) -> AsyncSession:
         if self.session is None:
-            self.session = AsyncSession(impersonate="chrome")
+            self.session = AsyncSession(
+                impersonate="chrome120",
+                headers=self.HEADERS
+            )
         return self.session
 
     async def close(self):
