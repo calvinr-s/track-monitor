@@ -47,6 +47,12 @@ class BetfairSource:
                 proxy=PROXY_URL
             )
             if resp.status_code != 200:
+                print(f"Betfair status {resp.status_code} for {url.split('/')[-1]}")
+                return None
+            # Check if response is JSON
+            content_type = resp.headers.get('content-type', '')
+            if 'json' not in content_type:
+                print(f"Betfair got HTML instead of JSON for {url.split('/')[-1]}")
                 return None
             return resp.json()
         except Exception as e:
