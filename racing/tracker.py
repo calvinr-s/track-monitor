@@ -457,7 +457,7 @@ class EVTracker:
                                 date_str = row[0]
                                 time_str = row[1]
                                 race_dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
-                                race_dt = SYDNEY_TZ.localize(race_dt)
+                                race_dt = race_dt.replace(tzinfo=SYDNEY_TZ)
 
                                 now = datetime.now(SYDNEY_TZ)
                                 if (now - race_dt).total_seconds() > 1800:  # 30 min
